@@ -39,7 +39,7 @@ package org.apache.spark.sql.execution.datasources.ums
 
 import java.io.InputStream
 
-import com.fasterxml.jackson.core.{JsonFactory, JsonParser}
+import com.fasterxml.jackson.core.{JsonFactory, JsonParseException, JsonParser}
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.google.common.io.ByteStreams
 import org.apache.hadoop.conf.Configuration
@@ -59,6 +59,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.{AnalysisException, Dataset, Encoders, SparkSession}
 import org.apache.spark.unsafe.types.UTF8String
 import org.apache.spark.util.Utils
+
 import scala.collection.JavaConversions._
 
 /**
@@ -174,13 +175,19 @@ object TextInputJsonDataSource extends JsonDataSource {
 			requiredSchema,
 			parser.options.columnNameOfCorruptRecord)
 		linesReader.flatMap { elem =>
-			getPayloadData(elem, requiredSchema).flatMap(data => safeParser.parse(new Text(data)))
+			try {
+				getPayloadData(elem, requiredSchema).flatMap(data => safeParser.parse(new Text(data)))
+			} catch {
+				// for non complete json record
+				case e: JsonParseException =>
+					Iterator.empty
+			}
 		}
 	}
 
 	private def getPayloadData(text: Text, requiredSchema: StructType): Iterator[String] = {
 		val mapper = new ObjectMapper()
-		// mapper.configure(JsonParser.Feature.ALLOW_UNQUOTED_CONTROL_CHARS, true)
+
 		val ums = mapper.readTree(text.toString)
 		val payload = ums.get(UMSProtocol.PAYLOAD).iterator()
 		val nameTypeIndex = ums.get(UMSProtocol.SCHEMA).get(UMSProtocol.FIELDS).toSeq.zipWithIndex.map { case (node, index) =>
@@ -195,13 +202,14 @@ object TextInputJsonDataSource extends JsonDataSource {
 				// such as one column is number type (not quoted), then change to string(must quoted).
 				val value = nameTypeIndex(f.name) match {
 					case (UMSProtocol.STRING | UMSProtocol.TIMESTAMP | UMSProtocol.DATETIME | UMSProtocol.DATE, index) =>
-						"\"" +
-							record.get(index).asText()
-								.stripPrefix("\"")
-								.stripSuffix("\"")
-								.replace("\n", "\\n")
-						    	.replace("\"", "\\\"") +
-							"\""
+						record.get(index).toString
+					case (UMSProtocol.DECIMAL | UMSProtocol.DOUBLE | UMSProtocol.FLOAT, index) =>
+						val data = record.get(index).asText().trim
+						if (data.startsWith(".")) {
+							"0" + data
+						} else if (data.startsWith("-.")) {
+							"-0." + data.stripPrefix("-.")
+						} else data
 					case (_, index) =>
 						record.get(index).asText()
 				}

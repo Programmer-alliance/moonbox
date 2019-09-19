@@ -25,70 +25,54 @@ import moonbox.core._
 import moonbox.core.command.{InsertMode, _}
 import moonbox.core.datasys.DataSystem
 import org.apache.spark.sql.SaveMode
+import org.apache.spark.sql.catalyst.plans.logical.InsertIntoTable
 
 
 object Main extends MbLogging {
 
 	def main(args: Array[String]) {
 		val conf = new MbConf()
-		val keyValues = for (i <- 0 until(args.length, 2)) yield (args(i), args(i+1))
+		val keyValues = for (i <- 0 until(args.length, 2)) yield (args(i), args(i + 1))
+		var org: String = null
 		var username: String = null
 		var sqls: Seq[String] = null
 		keyValues.foreach {
-			case (k ,v) if k.equals("username") =>
+			case (k, v) if k.equals("username") =>
 				username = v
+			case (k, v) if k.equals("org") =>
+				org = v
 			case (k, v) if k.equals("sqls") =>
-				sqls = v.split(";")
+				sqls = v.trim.stripSuffix(";").split(";")
 			case (k, v) =>
 				conf.set(k, v)
 		}
-		new Main(conf, username, sqls).runMain()
+		new Main(conf, org, username, sqls).runMain()
 	}
 }
 
-class Main(conf: MbConf, username: String, sqls: Seq[String]) {
+class Main(conf: MbConf, org: String, username: String, sqls: Seq[String]) {
 
-	private val mbSession: MoonboxSession = new MoonboxSession(conf, username, autoLoadDatabases = false)
+	private val mbSession: MoonboxSession = new MoonboxSession(conf, org, username)
 
 	def runMain(): Unit = {
 		sqls.foreach { sql =>
 			mbSession.parsedCommand(sql) match {
 				case runnable: MbRunnableCommand =>
-					runnable.run(mbSession)(mbSession.sessionEnv)
+					runnable.run(mbSession)
 
-				case createTempView: CreateTempView =>
-					val optimized = mbSession.optimizedPlan(createTempView.query)
-					val df = mbSession.toDF(optimized)
-					if (createTempView.isCache) {
+				case CreateTempView(name, query, isCache, replaceIfExists) =>
+					val df = mbSession.engine.createDataFrame(query, prepared = false)
+					if (isCache) {
 						df.cache()
 					}
-					if (createTempView.replaceIfExists) {
-						df.createOrReplaceTempView(createTempView.name)
+					if (replaceIfExists) {
+						df.createOrReplaceTempView(name)
 					} else {
-						df.createTempView(createTempView.name)
+						df.createTempView(name)
 					}
 
-				case insert @ InsertInto(MbTableIdentifier(table, database), query, colNames, insertMode) =>
-					val sinkCatalogTable = mbSession.getCatalogTable(table, database)
-					val options = sinkCatalogTable.properties
-					val format = DataSystem.lookupDataSource(options("type"))
-					val saveMode = if (insertMode == InsertMode.Overwrite) SaveMode.Overwrite else SaveMode.Append
-					val optimized = mbSession.optimizedPlan(query)
-					val dataFrame = mbSession.toDF(optimized)
-					val dataFrameWriter = TableInsertPrivilegeChecker
-						.intercept(mbSession, sinkCatalogTable, dataFrame)
-						.write
-						.format(format)
-						.options(options)
-						.partitionBy(colNames:_*)
-						.mode(saveMode)
-					if (insertMode == InsertMode.Merge) {
-						dataFrameWriter.option("update", "true")
-					}
-					if (options.contains("partitionColumnNames")) {
-						dataFrameWriter.partitionBy(options("partitionColumnNames").split(","): _*)
-					}
-					dataFrameWriter.save()
+				case Statement(s) =>
+					mbSession.sql(s, 0)
 
 				case _ =>
 					throw new Exception("Unsupport command in batch mode")

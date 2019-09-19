@@ -104,4 +104,21 @@ class MbUmsSuite extends FunSuite {
 		session.sql("select * from a").show()
 	}
 
+	test("ums") {
+		session.sql(
+			"""create table a(
+			  |ums_id_ long,
+			  |ums_ts_ timestamp,
+			  |ums_op_ string,
+			  |ums_uid_ string,
+			  |ID long,
+			  |ACC_TYPE_ID string,
+			  |USER_ID long,
+			  |ACC_ID string
+			  |) using ums options(path '/tmp/user_account_new.txt', allowNumericLeadingZeros 'true')
+			""".stripMargin
+		)
+		session.sql("select count(*) from a").show(1000000)
+	}
+
 }

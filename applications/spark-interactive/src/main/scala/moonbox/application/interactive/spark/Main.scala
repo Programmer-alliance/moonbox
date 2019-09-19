@@ -27,7 +27,7 @@ import akka.actor.{ActorRef, ActorSystem, Address, Cancellable, Props}
 import com.typesafe.config.ConfigFactory
 import moonbox.common.util.Utils
 import moonbox.common.{MbConf, MbLogging}
-import moonbox.core.MoonboxSession
+import moonbox.grid.config._
 import moonbox.grid.deploy.DeployMessages._
 import moonbox.grid.deploy.master.ApplicationType
 import moonbox.grid.deploy.messages.Message._
@@ -50,21 +50,29 @@ object Main extends MbLogging {
 		val driverId = conf.get("driverId").getOrElse(throw new NoSuchElementException("driverId"))
 		val masters = conf.get("masters").map(_.split(";")).getOrElse(throw new NoSuchElementException("masters"))
 		val appType = conf.get("applicationType").getOrElse(throw new NoSuchElementException("applicationType"))
+		val appLabel = conf.get("appLabel").getOrElse("common")
 
-		val akkaConfig = Map(
-			"akka.jvm-exit-on-fatal-error" -> "true",
-			"akka.actor.provider" ->"akka.remote.RemoteActorRefProvider",
-			"akka.remote.enabled-transports.0" ->"akka.remote.netty.tcp",
-			"akka.remote.netty.tcp.hostname" -> Utils.localHostName(),
-			"akka.remote.netty.tcp.port" -> "0"
-		)
+
+		conf.set("moonbox.rpc.akka.remote.netty.tcp.hostname", Utils.localHostName())
+		conf.set("moonbox.rpc.akka.remote.netty.tcp.port", "0")
+
+		def akkaConfig: Map[String, String] = {
+			for { (key, value) <- AKKA_DEFAULT_CONFIG ++ AKKA_HTTP_DEFAULT_CONFIG ++ conf.getAll
+						if key.startsWith("moonbox.rpc.akka") || key.startsWith("moonbox.rest.akka")
+			} yield {
+				if (key.startsWith("moonbox.rpc.akka"))
+					(key.stripPrefix("moonbox.rpc."), value)
+				else
+					(key.stripPrefix("moonbox.rest."), value)
+			}
+		}
 
 		val akkaConf = ConfigFactory.parseMap(akkaConfig.asJava)
 		val system = ActorSystem("Moonbox", akkaConf)
 
 		try {
 			system.actorOf(Props(
-				classOf[Main], driverId, masters, conf, ApplicationType.apply(appType)
+				classOf[Main], driverId, appLabel, masters, conf, ApplicationType.apply(appType)
 			), name = "interactive")
 		} catch {
 			case e: Exception =>
@@ -77,6 +85,7 @@ object Main extends MbLogging {
 
 class Main(
 	driverId: String,
+	appLabel: String,
 	masterAddresses: Array[String],
 	val conf: MbConf,
 	appType: ApplicationType
@@ -133,14 +142,15 @@ class Main(
 			changeMaster(masterRef, masterRef.path.address)
 			masterRef ! ApplicationStateResponse(driverId)
 
-		case open @ OpenSession(username, database, sessionConfig) =>
+		case open @ OpenSession(org, username, database, sessionConfig) =>
 			val requester = sender()
 			val sessionId = newSessionId
-			val f = Future(new Runner(sessionId, username, database, conf, sessionConfig, self))
+			val f = Future(new Runner(sessionId, org, username, database, conf, sessionConfig, self))
 			f.onComplete {
 				case Success(runner) =>
 					sessionIdToRunner.put(sessionId, runner)
 					logInfo(s"Open session successfully for $username, session id is $sessionId, current database set to ${database.getOrElse("default")} ")
+					logInfo(s"Current ${sessionIdToRunner.size} users online.")
 					requester ! OpenSessionResponse(Some(sessionId), Some(host), Some(dataFetchPort), "Open session successfully.")
 				case Failure(e) =>
 					logError("open session error", e)
@@ -155,6 +165,7 @@ class Main(
 					}
 					val msg = s"Close session successfully $sessionId"
 					logInfo(msg)
+					logInfo(s"Current ${sessionIdToRunner.size} users online.")
 					sender() ! CloseSessionResponse(sessionId, success = true, msg)
 				case None =>
 					val msg = s"Your session id $sessionId  is incorrect. Or it is lost in runner."
@@ -182,7 +193,8 @@ class Main(
 								case error =>
 									Option(error.getMessage).getOrElse(error.getStackTrace.mkString("\n"))
 							}
-							logError(errorMessage)
+							logError("Query execute error", throwable)
+							logError(throwable.getStackTrace.mkString("\n"))
 							requester ! JobQueryResponse(
 								success = false,
 								schema = SchemaUtil.emptyJsonSchema,
@@ -233,10 +245,10 @@ class Main(
 				sender() ! UnregisterTimedEventFailed(message)
 			}
 
-		case sample @ SampleRequest(username, sql, database) =>
+		case sample @ SampleRequest(org, username, sql, database) =>
 			val requester = sender()
 			Future {
-				val servicer = new Servicer(username, database, conf, self)
+				val servicer = new Servicer(org, username, database, conf, self)
 				servicer.sample(sql)
 			}.onComplete {
 				case Success(response) =>
@@ -246,10 +258,10 @@ class Main(
 					requester ! SampleFailed(e.getMessage)
 			}
 
-		case translate @ TranslateRequest(username, sql, database) =>
+		case translate @ TranslateRequest(org, username, sql, database) =>
 			val requester = sender()
 			Future {
-				val servicer = new Servicer(username, database, conf, self)
+				val servicer = new Servicer(org, username, database, conf, self)
 				servicer.translate(sql)
 			}.onComplete {
 				case Success(response) =>
@@ -259,10 +271,10 @@ class Main(
 					requester ! SampleFailed(e.getMessage)
 			}
 
-		case verify @ VerifyRequest(username, sqls, database) =>
+		case verify @ VerifyRequest(org, username, sqls, database) =>
 			val requester = sender()
 			Future {
-				val servicer = new Servicer(username, database, conf, self)
+				val servicer = new Servicer(org, username, database, conf, self)
 				servicer.verify(sqls)
 			}.onComplete {
 				case Success(response) =>
@@ -272,10 +284,10 @@ class Main(
 					requester ! VerifyResponse(success = false, message = Some(e.getMessage))
 			}
 
-		case resource @ TableResourcesRequest(username, sqls, database) =>
+		case resource @ TableResourcesRequest(org, username, sqls, database) =>
 			val requester = sender()
 			Future {
-				val servicer = new Servicer(username, database, conf, self)
+				val servicer = new Servicer(org, username, database, conf, self)
 				servicer.resources(sqls)
 			}.onComplete {
 				case Success(response) =>
@@ -285,10 +297,10 @@ class Main(
 					requester ! TableResourcesResponses(success=false, message = Some(e.getMessage))
 			}
 
-		case schema @ SchemaRequest(username, sql, database) =>
+		case schema @ SchemaRequest(org, username, sql, database) =>
 			val requester = sender()
 			Future {
-				val servicer = new Servicer(username, database, conf, self)
+				val servicer = new Servicer(org, username, database, conf, self)
 				servicer.schema(sql)
 			}.onComplete {
 				case Success(response) =>
@@ -298,11 +310,11 @@ class Main(
 					requester ! SchemaFailed(e.getMessage)
 			}
 
-		case lineage @ LineageRequest(username, sql, database) =>
+		case lineage @ LineageRequest(org, username, sqls, database) =>
 			val requester = sender()
 			Future {
-				val servicer = new Servicer(username, database, conf, self)
-				servicer.lineage(sql)
+				val servicer = new Servicer(org, username, database, conf, self)
+				servicer.lineage(sqls)
 			}.onComplete {
 				case Success(response) =>
 					requester ! response
@@ -381,6 +393,7 @@ class Main(
 		logInfo(s"Try registering with master $masterRpcAddress.")
 		context.system.actorSelection(masterRpcAddress).tell(RegisterApplication(
 			driverId,
+			appLabel,
 			host,
 			port,
 			self,

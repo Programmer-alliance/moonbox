@@ -20,13 +20,14 @@
 
 package moonbox.core.command
 
-object PrivilegeType extends Enumeration {
-	type PrivilegeType = Value
+
+object RolePrivilege extends Enumeration {
+	type RolePrivilege = Value
 	val DDL = Value
 	val DCL = Value
 	val ACCOUNT = Value
 
-	def apply(privilege: String): PrivilegeType = privilege match {
+	def apply(privilege: String): RolePrivilege = privilege match {
 		case "DDL" => DDL
 		case "DCL" => DCL
 		case "ACCOUNT" => ACCOUNT
@@ -34,32 +35,54 @@ object PrivilegeType extends Enumeration {
 	}
 }
 
-trait ResourcePrivilege
+
+trait ResourcePrivilege {
+	val NAME: String
+
+	def isColumnLevel: Boolean = false
+}
+
+object ResourcePrivilege {
+	val ALL = Seq(
+		SelectPrivilege,
+		UpdatePrivilege,
+		InsertPrivilege,
+		DeletePrivilege,
+		TruncatePrivilege
+	)
+}
 
 
-object SelectPrivilege {
+case class ColumnSelectPrivilege(column: Seq[String])  extends ResourcePrivilege {
+
+	override def isColumnLevel: Boolean = true
+
 	val NAME = "SELECT"
 }
-case class SelectPrivilege(columns: Seq[String]) extends ResourcePrivilege
-object UpdatePrivilege {
+
+case class ColumnUpdatePrivilege(column: Seq[String]) extends ResourcePrivilege {
+
+	override def isColumnLevel: Boolean = true
+
 	val NAME = "UPDATE"
 }
-case class UpdatePrivilege(columns: Seq[String]) extends ResourcePrivilege
+
+case object SelectPrivilege extends ResourcePrivilege {
+	val NAME = "SELECT"
+}
+
+case object UpdatePrivilege extends ResourcePrivilege {
+	val NAME = "UPDATE"
+}
+
 case object InsertPrivilege extends ResourcePrivilege {
 	val NAME = "INSERT"
 }
+
 case object DeletePrivilege extends ResourcePrivilege {
 	val NAME = "DELETE"
 }
+
 case object TruncatePrivilege extends ResourcePrivilege {
 	val NAME = "TRUNCATE"
-}
-case object AllPrivilege extends ResourcePrivilege {
-	val NAMES = Seq(
-		SelectPrivilege.NAME,
-		UpdatePrivilege.NAME,
-		InsertPrivilege.NAME,
-		DeletePrivilege.NAME,
-		TruncatePrivilege.NAME
-	)
 }

@@ -38,6 +38,7 @@ trait OnceRunDriverDescription extends DriverDescription
 
 case class SparkLocalDriverDescription(
 	driverId: String,
+	label: String,
 	masters: Array[String],
 	config: Map[String, String]) extends LongRunDriverDescription {
 
@@ -58,6 +59,7 @@ case class SparkLocalDriverDescription(
 		(config.filterKeys(key => !key.startsWith("spark."))
 			++ Map(
 			"driverId" -> driverId,
+			"appLabel" -> label,
 			"masters" -> masters.mkString(";"),
 			"applicationType" -> "CENTRALIZED"
 		)).toSeq.flatMap { case (k, v) => Seq(k, v)}
@@ -78,6 +80,7 @@ case class SparkLocalDriverDescription(
 
 case class SparkClusterDriverDescription(
 	driverId: String,
+	label: String,
 	masters: Array[String],
 	config: Map[String, String]) extends LongRunDriverDescription {
 
@@ -93,6 +96,7 @@ case class SparkClusterDriverDescription(
 		(config.filterKeys(key => !key.startsWith("spark."))
 			++ Map(
 			"driverId" -> driverId,
+			"appLabel" -> label,
 			"masters" -> masters.mkString(";"),
 			"applicationType" -> "DISTRIBUTED"
 		)).toSeq.flatMap { case (k, v) => Seq(k, v)}
@@ -112,6 +116,7 @@ case class SparkClusterDriverDescription(
 }
 
 case class SparkBatchDriverDescription(
+	org: String,
 	username: String,
 	sqls: Seq[String],
 	config: Map[String, String]
@@ -128,6 +133,7 @@ case class SparkBatchDriverDescription(
 	override def toAppArgs: Seq[String] = {
 		(config.filterKeys(key => !key.startsWith("spark."))
 			++ Map(
+			"org" -> org,
 			"username" -> username,
 			"sqls" -> sqls.mkString(";")
 		)).toSeq.flatMap { case (k, v) => Seq(k, v) }
@@ -146,6 +152,7 @@ case class SparkBatchDriverDescription(
 
 case class HiveBatchDriverDescription(
 	driverId: String,
+	org: String,
 	username: String,
 	sqls: Seq[String],
 	config: Map[String, String]
@@ -162,6 +169,7 @@ case class HiveBatchDriverDescription(
 	override def toAppArgs: Seq[String] = {
 		Map(
 			"driverId" -> driverId,
+			"org" -> org,
 			"username" -> username,
 			"sqls" -> sqls.mkString(";")
 		).toSeq.flatMap { case (k, v) => Seq(k, v) }
